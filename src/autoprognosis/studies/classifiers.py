@@ -223,7 +223,7 @@ class ClassifierStudy(Study):
             )
             self.search_X = self.X.loc[self.search_Y.index].copy()
             self.search_group_ids = None
-            if self.group_ids:
+            if self.group_ids is not None:
                 self.search_group_ids = self.group_ids.loc[self.search_Y.index].copy()
         else:
             self.search_X = self.X.copy()
