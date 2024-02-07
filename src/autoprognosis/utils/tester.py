@@ -47,9 +47,11 @@ clf_supported_metrics = [
     "f1_score_weighted",
     "kappa",
     "kappa_quadratic",
+    "precision_binary",
     "precision_micro",
     "precision_macro",
     "precision_weighted",
+    "recall_binary",
     "recall_micro",
     "recall_macro",
     "recall_weighted",
@@ -101,13 +103,17 @@ class classifier_metrics:
         return self.metrics
 
     def score_proba(
-        self, y_test: np.ndarray, y_pred_proba: np.ndarray
+        self, y_test: np.ndarray, y_pred_proba: np.ndarray, threshold: float = None
     ) -> Dict[str, float]:
         if y_test is None or y_pred_proba is None:
             raise RuntimeError("Invalid input for score_proba")
 
         results = {}
-        y_pred = np.argmax(np.asarray(y_pred_proba), axis=1)
+        if threshold:
+            y_pred = (y_pred_proba[1] > threshold).astype(int)
+        else:
+            y_pred = np.argmax(np.asarray(y_pred_proba), axis=1)
+
         for metric in self.metrics:
             if metric == "aucprc":
                 results[metric] = self.average_precision_score(y_test, y_pred_proba)
@@ -131,6 +137,10 @@ class classifier_metrics:
                 results[metric] = cohen_kappa_score(y_test, y_pred)
             elif metric == "kappa_quadratic":
                 results[metric] = cohen_kappa_score(y_test, y_pred, weights="quadratic")
+            elif metric == "recall_binary":
+                results[metric] = recall_score(
+                    y_test, y_pred, average="binary", zero_division=0
+                )
             elif metric == "recall_micro":
                 results[metric] = recall_score(
                     y_test, y_pred, average="micro", zero_division=0
@@ -142,6 +152,10 @@ class classifier_metrics:
             elif metric == "recall_weighted":
                 results[metric] = recall_score(
                     y_test, y_pred, average="weighted", zero_division=0
+                )
+            elif metric == "precision_binary":
+                results[metric] = precision_score(
+                    y_test, y_pred, average="binary", zero_division=0
                 )
             elif metric == "precision_micro":
                 results[metric] = precision_score(
@@ -182,6 +196,8 @@ def evaluate_estimator(
     seed: int = 0,
     pretrained: bool = False,
     group_ids: Optional[pd.Series] = None,
+    threshold: float = 0.5,
+    is_calibrated: bool = False,
     *args: Any,
     **kwargs: Any,
 ) -> Dict:
@@ -255,14 +271,23 @@ def evaluate_estimator(
         Y_test = Y.loc[Y.index[test_index]]
 
         if pretrained:
-            model = estimator[indx]
+            model = estimator  # [indx]
         else:
             model = copy.deepcopy(estimator)
             model.fit(X_train, Y_train)
 
-        preds = model.predict_proba(X_test)
+        if is_calibrated:
+            preds = pd.DataFrame(model.predict_proba(X_test))
+        else:
+            preds = model.predict_proba(X_test)
+        # log.critical("FINDING OPTIMAL THRESHOLD")
+        # threshold = find_optimal_threshold(
+        #     y_true=Y_test,
+        #     y_proba=preds[1],
+        #     metric=roc_auc_score
+        # )
 
-        scores = evaluator.score_proba(Y_test, preds)
+        scores = evaluator.score_proba(Y_test, preds, threshold=threshold)
         for metric in scores:
             results[metric][indx] = scores[metric]
 
@@ -280,6 +305,21 @@ def evaluate_estimator(
         "raw": output_clf,
         "str": output_clf_str,
     }
+
+
+def find_optimal_threshold(y_true, y_proba, metric=roc_auc_score):
+    optimal_threshold = 0
+    optimal_score = 0
+
+    for i in range(0, 1000, 1):
+        predictions = (y_proba > (i / 1000)).astype(int)
+        curr_score = metric(y_true, predictions)
+        if curr_score > optimal_score:
+            optimal_score = curr_score
+            optimal_threshold = i / 1000
+
+    print(f"Threshold: {round(optimal_threshold, 3)} - Score: {round(optimal_score, 3)}")
+    return optimal_threshold
 
 
 @validate_arguments(config=dict(arbitrary_types_allowed=True))
